@@ -34,6 +34,33 @@ static SRWLOCK g_stateLock = SRWLOCK_INIT;
 static std::unordered_map<uintptr_t, TrackedEnemy> g_enemies;
 static std::vector<DamagePopup> g_popups;
 static uint32_t g_rngState = 0x12345678u;
+static int g_debugHitLogs = 0;
+
+static float NextRandFloat(float lo, float hi);
+
+static void SpawnDamagePopupLocked(const Vec3& headPos, float dealt, float maxHP, bool isKill) {
+    if (!g_cfg.showDamageNumbers || dealt < g_cfg.minDamage) return;
+    DamagePopup pop;
+    pop.worldPos = headPos;
+    // Slightly below top of head (face/upper chest area) + small 3D jitter
+    pop.worldPos.y -= 0.15f;
+    pop.worldPos.x += NextRandFloat(-0.18f, 0.18f);
+    pop.worldPos.z += NextRandFloat(-0.18f, 0.18f);
+    pop.amount = dealt;
+    pop.age = 0.0f;
+    pop.duration = g_cfg.dmgDuration;
+    pop.screenOffsetX = NextRandFloat(-14.0f, 14.0f);
+    pop.screenVelX = NextRandFloat(-22.0f, 22.0f);
+    pop.screenOffsetY = 0.0f;
+    pop.isKill = isKill;
+    pop.isCrit = (maxHP > 0.0f && dealt >= maxHP * g_cfg.critHpRatio)
+                 || (dealt >= g_cfg.critMinDamage);
+
+    if (g_popups.size() >= 64) {
+        g_popups.erase(g_popups.begin());
+    }
+    g_popups.push_back(pop);
+}
 
 static double GetNowSeconds() {
     static LARGE_INTEGER freq = {};
@@ -191,6 +218,39 @@ static void SafeHideVanillaWidgets(void* item) {
     }
 }
 
+// Resolves CAI* from IControlObject* passed to engine TakeDamage.
+// Engine IControlObject::TakeDamage accesses gameObj = *(*(controlObj + 0x8) + 0xa0).
+// We validate with SafeReadEnemyHealth (which verifies HealthModule::owner == candidate).
+static bool ResolveEnemyFromControlObj(void* controlObj, uintptr_t& outEnemy,
+                                       float& outCurHP, float& outMaxHP) {
+    if (!controlObj) return false;
+    uintptr_t ctrl = reinterpret_cast<uintptr_t>(controlObj);
+    uintptr_t candidates[4] = {0, 0, 0, 0};
+    int count = 0;
+
+    uintptr_t inner = 0;
+    if (SafeReadPtr(ctrl + 0x8, inner) && inner > 0x10000) {
+        uintptr_t gameObj = 0;
+        if (SafeReadPtr(inner + 0xa0, gameObj) && gameObj > 0x10000) {
+            candidates[count++] = gameObj;
+            if (gameObj > 0x28) candidates[count++] = gameObj - 0x28;
+        }
+    }
+    if (ctrl > 0x28) candidates[count++] = ctrl - 0x28;
+    candidates[count++] = ctrl;
+
+    for (int i = 0; i < count; ++i) {
+        float c = 0.0f, m = 0.0f;
+        if (SafeReadEnemyHealth(candidates[i], c, m)) {
+            outEnemy = candidates[i];
+            outCurHP = c;
+            outMaxHP = m;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---- Detour #1: CHudEnemyHpItem::Update ----
 static void __fastcall HkHudEnemyHpUpdate(void* item, void* enemyPtr, float curHP, float maxHP,
                                           float curArmor, float maxArmor, int level) {
@@ -201,13 +261,17 @@ static void __fastcall HkHudEnemyHpUpdate(void* item, void* enemyPtr, float curH
         Vec3 pos = {0, 0, 0};
         if (SafeGetEnemyHeadPos(enemy, pos)) {
             double now = GetNowSeconds();
+            float clampedHP = (curHP < 0.0f) ? 0.0f : curHP;
             AcquireSRWLockExclusive(&g_stateLock);
             auto& entry = g_enemies[enemy];
-            if (entry.enemyPtr == 0) {
+            bool isNew = (entry.enemyPtr == 0);
+            float prevHP = entry.curHP;
+            if (isNew) {
                 entry.enemyPtr = enemy;
-                entry.displayHP = curHP;
+                entry.displayHP = clampedHP;
+                prevHP = clampedHP;
             }
-            entry.curHP = (curHP < 0.0f) ? 0.0f : curHP;
+            entry.curHP = clampedHP;
             entry.maxHP = maxHP;
             if (entry.displayHP < entry.curHP) entry.displayHP = entry.curHP;
             entry.worldPos = pos;
@@ -219,6 +283,20 @@ static void __fastcall HkHudEnemyHpUpdate(void* item, void* enemyPtr, float curH
             } else if (entry.curHP > 0.01f) {
                 entry.isDead = false;
                 entry.deathTime = 0.0;
+            }
+
+            // Fallback damage popup if HP dropped and TakeDamage didn't already emit one recently
+            if (!isNew && (prevHP - clampedHP) >= g_cfg.minDamage && (now - entry.lastPopupTime) > 0.04) {
+                float dealt = prevHP - clampedHP;
+                bool isKill = (clampedHP <= 0.01f);
+                SpawnDamagePopupLocked(pos, dealt, maxHP, isKill);
+                entry.lastPopupTime = now;
+                entry.lastDamageTime = now;
+                if (g_debugHitLogs < 8) {
+                    ++g_debugHitLogs;
+                    LogPrintf("DamagePopup [HudUpdate]: dealt=%.1f hp=%.1f/%.1f kill=%d",
+                              dealt, clampedHP, maxHP, isKill ? 1 : 0);
+                }
             }
             ReleaseSRWLockExclusive(&g_stateLock);
         }
@@ -235,26 +313,16 @@ static void __fastcall HkHudEnemyHpUpdate(void* item, void* enemyPtr, float curH
 static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
     auto orig = reinterpret_cast<FnTakeDamage>(g_hookTakeDamage.trampoline);
 
-    bool isEnemyAI = false;
     uintptr_t enemy = 0;
     float hpBefore = 0.0f;
     float maxHPBefore = 0.0f;
-
-    if (controlObj && SafeIsAI(controlObj)) {
-        uintptr_t candidate = reinterpret_cast<uintptr_t>(controlObj) - 0x28;
-        if (SafeReadEnemyHealth(candidate, hpBefore, maxHPBefore)) {
-            isEnemyAI = true;
-            enemy = candidate;
-        }
-    }
+    bool isEnemyAI = ResolveEnemyFromControlObj(controlObj, enemy, hpBefore, maxHPBefore);
 
     orig(controlObj, dmgInfo);
 
     if (isEnemyAI && hpBefore > 0.01f) {
         float hpAfter = hpBefore;
         float maxHPAfter = maxHPBefore;
-        // After a killing blow (or decapitation/instant-kill), IsDead() may flip true
-        // even if HealthModule+0x78 wasn't zeroed yet — force hpAfter = 0 in that case.
         bool deadNow = SafeIsEnemyDead(enemy);
         if (deadNow || !SafeReadEnemyHealth(enemy, hpAfter, maxHPAfter)) {
             hpAfter = 0.0f;
@@ -284,27 +352,14 @@ static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
                 if (entry.deathTime == 0.0) entry.deathTime = now;
             }
 
-            if (g_cfg.showDamageNumbers && hasPos && dealt >= g_cfg.minDamage) {
-                DamagePopup pop;
-                pop.worldPos = pos;
-                // Slightly below top of head (face/upper chest area) + small 3D jitter
-                pop.worldPos.y -= 0.15f;
-                pop.worldPos.x += NextRandFloat(-0.18f, 0.18f);
-                pop.worldPos.z += NextRandFloat(-0.18f, 0.18f);
-                pop.amount = dealt;
-                pop.age = 0.0f;
-                pop.duration = g_cfg.dmgDuration;
-                pop.screenOffsetX = NextRandFloat(-14.0f, 14.0f);
-                pop.screenVelX = NextRandFloat(-22.0f, 22.0f);
-                pop.screenOffsetY = 0.0f;
-                pop.isKill = (deadNow || hpAfter <= 0.01f);
-                pop.isCrit = (entry.maxHP > 0.0f && dealt >= entry.maxHP * g_cfg.critHpRatio)
-                             || (dealt >= g_cfg.critMinDamage);
-
-                if (g_popups.size() >= 64) {
-                    g_popups.erase(g_popups.begin());
+            if (hasPos && dealt >= g_cfg.minDamage) {
+                SpawnDamagePopupLocked(pos, dealt, entry.maxHP, deadNow || hpAfter <= 0.01f);
+                entry.lastPopupTime = now;
+                if (g_debugHitLogs < 8) {
+                    ++g_debugHitLogs;
+                    LogPrintf("DamagePopup [TakeDamage]: dealt=%.1f hp=%.1f/%.1f kill=%d",
+                              dealt, hpAfter, entry.maxHP, (deadNow || hpAfter <= 0.01f) ? 1 : 0);
                 }
-                g_popups.push_back(pop);
             }
             ReleaseSRWLockExclusive(&g_stateLock);
         }
@@ -448,14 +503,25 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
         // Refresh live HP, IsDead(), and head position EVERY frame for ALL living tracked enemies
         // (including aimed enemies, because vanilla HudEnemyHp stops updating on the death frame!)
         if (!e.isDead) {
+            float prevHP = e.curHP;
             bool deadNow = SafeIsEnemyDead(e.enemyPtr);
             float c = 0.0f, m = 0.0f;
             if (deadNow) {
                 e.curHP = 0.0f;
                 e.isDead = true;
                 e.deathTime = now;
+                if (prevHP >= g_cfg.minDamage && (now - e.lastPopupTime) > 0.04) {
+                    SpawnDamagePopupLocked(e.worldPos, prevHP, e.maxHP, true);
+                    e.lastPopupTime = now;
+                    e.lastDamageTime = now;
+                    if (g_debugHitLogs < 8) {
+                        ++g_debugHitLogs;
+                        LogPrintf("DamagePopup [FrameKill]: dealt=%.1f maxHP=%.1f", prevHP, e.maxHP);
+                    }
+                }
             } else if (SafeReadEnemyHealth(e.enemyPtr, c, m)) {
-                e.curHP = (c < 0.0f) ? 0.0f : c;
+                float newHP = (c < 0.0f) ? 0.0f : c;
+                e.curHP = newHP;
                 e.maxHP = m;
                 if (e.curHP <= 0.01f) {
                     e.curHP = 0.0f;
@@ -465,6 +531,17 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
                     Vec3 p;
                     if (SafeGetEnemyHeadPos(e.enemyPtr, p)) {
                         e.worldPos = p;
+                    }
+                }
+                if ((prevHP - e.curHP) >= g_cfg.minDamage && (now - e.lastPopupTime) > 0.04) {
+                    float dealt = prevHP - e.curHP;
+                    SpawnDamagePopupLocked(e.worldPos, dealt, e.maxHP, e.isDead);
+                    e.lastPopupTime = now;
+                    e.lastDamageTime = now;
+                    if (g_debugHitLogs < 8) {
+                        ++g_debugHitLogs;
+                        LogPrintf("DamagePopup [FrameDelta]: dealt=%.1f hp=%.1f/%.1f kill=%d",
+                                  dealt, e.curHP, e.maxHP, e.isDead ? 1 : 0);
                     }
                 }
             } else {

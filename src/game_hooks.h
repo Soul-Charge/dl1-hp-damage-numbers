@@ -19,6 +19,7 @@ struct TrackedEnemy {
     Vec3 worldPos = {0, 0, 0};  // 3D head/bar anchor
     double lastAimedTime = 0.0;
     double lastDamageTime = 0.0;
+    double lastPopupTime = 0.0; // Dedup between TakeDamage hook and HP-delta fallback
     double deathTime = 0.0;     // Non-zero once HP <= 0
     bool isAimed = false;
     bool isDead = false;
