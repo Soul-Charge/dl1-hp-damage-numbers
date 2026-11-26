@@ -89,6 +89,22 @@ static bool SafeIsAI(void* controlObj) {
     }
 }
 
+// Calls the game's own AI IsDead() check: (enemy + 0x350)->vtable[0x40](enemy + 0x350)
+static bool SafeIsEnemyDead(uintptr_t enemy) {
+    if (enemy < 0x10000) return true;
+    __try {
+        void* sub = reinterpret_cast<void*>(enemy + 0x350);
+        uintptr_t vtbl = *reinterpret_cast<uintptr_t*>(sub);
+        if (vtbl < 0x10000) return false;
+        using FnIsDead = bool (__fastcall*)(void*);
+        auto fn = *reinterpret_cast<FnIsDead*>(vtbl + 0x40);
+        if (!fn) return false;
+        return fn(sub);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // Validates that enemy is a real CAI with an active HealthModule whose owner == enemy.
 static bool SafeReadEnemyHealth(uintptr_t enemy, float& outCurHP, float& outMaxHP) {
     if (enemy < 0x10000) return false;
@@ -237,14 +253,17 @@ static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
     if (isEnemyAI && hpBefore > 0.01f) {
         float hpAfter = hpBefore;
         float maxHPAfter = maxHPBefore;
-        // After a killing blow, HealthModule may still be readable with curHP == 0
-        if (!SafeReadEnemyHealth(enemy, hpAfter, maxHPAfter)) {
+        // After a killing blow (or decapitation/instant-kill), IsDead() may flip true
+        // even if HealthModule+0x78 wasn't zeroed yet — force hpAfter = 0 in that case.
+        bool deadNow = SafeIsEnemyDead(enemy);
+        if (deadNow || !SafeReadEnemyHealth(enemy, hpAfter, maxHPAfter)) {
             hpAfter = 0.0f;
+            deadNow = true;
         }
         if (hpAfter < 0.0f) hpAfter = 0.0f;
 
         float dealt = hpBefore - hpAfter;
-        if (dealt >= g_cfg.minDamage) {
+        if (dealt >= g_cfg.minDamage || deadNow) {
             Vec3 pos = {0, 0, 0};
             bool hasPos = SafeGetEnemyHeadPos(enemy, pos);
             double now = GetNowSeconds();
@@ -259,12 +278,13 @@ static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
             entry.maxHP = (maxHPAfter > 0.0f) ? maxHPAfter : maxHPBefore;
             if (hasPos) entry.worldPos = pos;
             entry.lastDamageTime = now;
-            if (hpAfter <= 0.01f) {
+            if (deadNow || hpAfter <= 0.01f) {
+                entry.curHP = 0.0f;
                 entry.isDead = true;
-                entry.deathTime = now;
+                if (entry.deathTime == 0.0) entry.deathTime = now;
             }
 
-            if (g_cfg.showDamageNumbers && hasPos) {
+            if (g_cfg.showDamageNumbers && hasPos && dealt >= g_cfg.minDamage) {
                 DamagePopup pop;
                 pop.worldPos = pos;
                 // Slightly below top of head (face/upper chest area) + small 3D jitter
@@ -277,7 +297,7 @@ static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
                 pop.screenOffsetX = NextRandFloat(-14.0f, 14.0f);
                 pop.screenVelX = NextRandFloat(-22.0f, 22.0f);
                 pop.screenOffsetY = 0.0f;
-                pop.isKill = (hpAfter <= 0.01f);
+                pop.isKill = (deadNow || hpAfter <= 0.01f);
                 pop.isCrit = (entry.maxHP > 0.0f && dealt >= entry.maxHP * g_cfg.critHpRatio)
                              || (dealt >= g_cfg.critMinDamage);
 
@@ -418,19 +438,27 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
         bool recentlyHit   = (now - e.lastDamageTime) < static_cast<double>(g_cfg.lingerSeconds);
         e.isAimed = recentlyAimed;
 
-        // Prune dead enemies after 0.65s fade, or untracked enemies after timeout
-        if ((e.isDead && (now - e.deathTime) > 0.65) || (!recentlyAimed && !recentlyHit)) {
+        // Prune dead enemies quickly (0.30s) so corpses never linger with stale bars,
+        // or untracked enemies after timeout.
+        if ((e.isDead && (now - e.deathTime) > 0.30) || (!recentlyAimed && !recentlyHit)) {
             it = g_enemies.erase(it);
             continue;
         }
 
-        // Refresh live HP & head position for living recently-damaged enemies
-        if (!e.isDead && !recentlyAimed) {
+        // Refresh live HP, IsDead(), and head position EVERY frame for ALL living tracked enemies
+        // (including aimed enemies, because vanilla HudEnemyHp stops updating on the death frame!)
+        if (!e.isDead) {
+            bool deadNow = SafeIsEnemyDead(e.enemyPtr);
             float c = 0.0f, m = 0.0f;
-            if (SafeReadEnemyHealth(e.enemyPtr, c, m)) {
+            if (deadNow) {
+                e.curHP = 0.0f;
+                e.isDead = true;
+                e.deathTime = now;
+            } else if (SafeReadEnemyHealth(e.enemyPtr, c, m)) {
                 e.curHP = (c < 0.0f) ? 0.0f : c;
                 e.maxHP = m;
                 if (e.curHP <= 0.01f) {
+                    e.curHP = 0.0f;
                     e.isDead = true;
                     e.deathTime = now;
                 } else {
@@ -446,9 +474,9 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
             }
         }
 
-        // Smoothly drain trailing displayHP toward curHP
+        // Smoothly drain trailing displayHP toward curHP (fast drain so it never feels sluggish)
         if (e.displayHP > e.curHP) {
-            float drainSpeed = (std::max)(e.maxHP * 0.65f, (e.displayHP - e.curHP) * 4.5f);
+            float drainSpeed = (std::max)(e.maxHP * 1.4f, (e.displayHP - e.curHP) * 7.5f);
             e.displayHP -= drainSpeed * dt;
             if (e.displayHP < e.curHP) e.displayHP = e.curHP;
         } else {
