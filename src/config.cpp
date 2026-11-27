@@ -79,8 +79,8 @@ void ConfigLoad(HMODULE selfMod) {
     }
 
     g_cfg.enabled           = ReadIniInt("General", "enabled", 1, path) != 0;
-    g_cfg.toggleKey         = ReadIniInt("General", "toggle_key", VK_F9, path);
-    g_cfg.modeKey           = ReadIniInt("General", "mode_key", VK_F10, path);
+    g_cfg.toggleKey         = ReadIniInt("General", "toggle_key", VK_F7, path);
+    g_cfg.modeKey           = ReadIniInt("General", "mode_key", VK_F8, path);
     g_cfg.enableLog         = ReadIniInt("General", "enable_log", 1, path) != 0;
 
     g_cfg.showHealthBar     = ReadIniInt("HealthBar", "show_health_bar", 1, path) != 0;

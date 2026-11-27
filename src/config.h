@@ -5,8 +5,8 @@
 struct ModConfig {
     // [General]
     bool enabled = true;
-    int toggleKey = VK_F9;      // Toggle entire overlay
-    int modeKey = VK_F10;       // Cycle bar mode: Custom Bar+Numbers -> Numbers Only -> Off
+    int toggleKey = VK_F7;      // Toggle entire overlay
+    int modeKey = VK_F8;        // Cycle bar mode: Custom Bar+Numbers -> Numbers Only -> Off
     bool enableLog = true;
 
     // [HealthBar]
