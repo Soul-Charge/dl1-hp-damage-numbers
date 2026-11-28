@@ -1,4 +1,5 @@
 build_obj/
+release/
 *.log
 *.pdb
 *.ilk

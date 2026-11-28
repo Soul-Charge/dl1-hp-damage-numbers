@@ -34,7 +34,6 @@ static SRWLOCK g_stateLock = SRWLOCK_INIT;
 static std::unordered_map<uintptr_t, TrackedEnemy> g_enemies;
 static std::vector<DamagePopup> g_popups;
 static uint32_t g_rngState = 0x12345678u;
-static int g_debugHitLogs = 0;
 
 static float NextRandFloat(float lo, float hi);
 
@@ -292,11 +291,6 @@ static void __fastcall HkHudEnemyHpUpdate(void* item, void* enemyPtr, float curH
                 SpawnDamagePopupLocked(pos, dealt, maxHP, isKill);
                 entry.lastPopupTime = now;
                 entry.lastDamageTime = now;
-                if (g_debugHitLogs < 8) {
-                    ++g_debugHitLogs;
-                    LogPrintf("DamagePopup [HudUpdate]: dealt=%.1f hp=%.1f/%.1f kill=%d",
-                              dealt, clampedHP, maxHP, isKill ? 1 : 0);
-                }
             }
             ReleaseSRWLockExclusive(&g_stateLock);
         }
@@ -355,11 +349,6 @@ static void __fastcall HkTakeDamage(void* controlObj, const void* dmgInfo) {
             if (hasPos && dealt >= g_cfg.minDamage) {
                 SpawnDamagePopupLocked(pos, dealt, entry.maxHP, deadNow || hpAfter <= 0.01f);
                 entry.lastPopupTime = now;
-                if (g_debugHitLogs < 8) {
-                    ++g_debugHitLogs;
-                    LogPrintf("DamagePopup [TakeDamage]: dealt=%.1f hp=%.1f/%.1f kill=%d",
-                              dealt, hpAfter, entry.maxHP, (deadNow || hpAfter <= 0.01f) ? 1 : 0);
-                }
             }
             ReleaseSRWLockExclusive(&g_stateLock);
         }
@@ -514,15 +503,13 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
                     SpawnDamagePopupLocked(e.worldPos, prevHP, e.maxHP, true);
                     e.lastPopupTime = now;
                     e.lastDamageTime = now;
-                    if (g_debugHitLogs < 8) {
-                        ++g_debugHitLogs;
-                        LogPrintf("DamagePopup [FrameKill]: dealt=%.1f maxHP=%.1f", prevHP, e.maxHP);
-                    }
                 }
             } else if (SafeReadEnemyHealth(e.enemyPtr, c, m)) {
                 float newHP = (c < 0.0f) ? 0.0f : c;
                 e.curHP = newHP;
-                e.maxHP = m;
+                // Preserve scaled maxHP from HudEnemyHp when larger than base HealthModule+0x7c
+                if (m > e.maxHP) e.maxHP = m;
+                if (e.curHP > e.maxHP) e.maxHP = e.curHP;
                 if (e.curHP <= 0.01f) {
                     e.curHP = 0.0f;
                     e.isDead = true;
@@ -538,11 +525,6 @@ void GameHooksUpdateAndSnapshot(float dt, FrameSnapshot& out) {
                     SpawnDamagePopupLocked(e.worldPos, dealt, e.maxHP, e.isDead);
                     e.lastPopupTime = now;
                     e.lastDamageTime = now;
-                    if (g_debugHitLogs < 8) {
-                        ++g_debugHitLogs;
-                        LogPrintf("DamagePopup [FrameDelta]: dealt=%.1f hp=%.1f/%.1f kill=%d",
-                                  dealt, e.curHP, e.maxHP, e.isDead ? 1 : 0);
-                    }
                 }
             } else {
                 // Entity despawned or invalid

@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 param(
     [switch]$Install,
     [string]$GameDir = "G:\SteamLibrary\steamapps\common\Dying Light"
