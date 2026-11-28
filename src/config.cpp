@@ -28,7 +28,7 @@ void LogInit(HMODULE selfMod) {
     snprintf(path, sizeof(path), "%sdl1_hp_damage.log", g_modDir);
     g_logFile = fopen(path, "w");
     if (g_logFile) {
-        fprintf(g_logFile, "DL1 Enemy HP & Damage Numbers v1.0\n");
+        fprintf(g_logFile, "DL1 Enemy HP & Damage Numbers v1.0.1\n");
         fflush(g_logFile);
     }
 }
@@ -68,13 +68,21 @@ static int ReadIniInt(const char* sec, const char* key, int defVal, const char* 
     return (end && end != buf) ? static_cast<int>(v) : defVal;
 }
 
+static bool DetectSystemChinese() {
+    LANGID lang = GetUserDefaultUILanguage();
+    return PRIMARYLANGID(lang) == LANG_CHINESE;
+}
+
 void ConfigLoad(HMODULE selfMod) {
     EnsureModDir(selfMod);
+    g_cfg.useChinese = DetectSystemChinese();
+
     char path[MAX_PATH];
     snprintf(path, sizeof(path), "%sdl1_hp_damage.ini", g_modDir);
 
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
-        LogPrintf("Config not found at %s, using defaults.", path);
+        LogPrintf("Config not found at %s, using defaults (lang=%s).",
+                  path, g_cfg.useChinese ? "zh" : "en");
         return;
     }
 
@@ -82,6 +90,16 @@ void ConfigLoad(HMODULE selfMod) {
     g_cfg.toggleKey         = ReadIniInt("General", "toggle_key", VK_F5, path);
     g_cfg.modeKey           = ReadIniInt("General", "mode_key", VK_F6, path);
     g_cfg.enableLog         = ReadIniInt("General", "enable_log", 1, path) != 0;
+
+    char langBuf[32] = {};
+    GetPrivateProfileStringA("General", "language", "auto", langBuf, sizeof(langBuf), path);
+    if (_stricmp(langBuf, "zh") == 0 || _stricmp(langBuf, "cn") == 0 || _stricmp(langBuf, "zh-cn") == 0) {
+        g_cfg.useChinese = true;
+    } else if (_stricmp(langBuf, "en") == 0 || _stricmp(langBuf, "en-us") == 0) {
+        g_cfg.useChinese = false;
+    } else {
+        g_cfg.useChinese = DetectSystemChinese();
+    }
 
     g_cfg.showHealthBar     = ReadIniInt("HealthBar", "show_health_bar", 1, path) != 0;
     g_cfg.drawCustomBar     = ReadIniInt("HealthBar", "draw_custom_bar", 1, path) != 0;
@@ -104,7 +122,7 @@ void ConfigLoad(HMODULE selfMod) {
     g_cfg.minDamage         = ReadIniFloat("DamageNumbers", "min_damage", 1.0f, path);
     g_cfg.showKillBadge     = ReadIniInt("DamageNumbers", "show_kill_badge", 1, path) != 0;
 
-    LogPrintf("Config loaded: enabled=%d customBar=%d hideVanilla=%d hpNum=%d dmgNum=%d",
-              g_cfg.enabled, g_cfg.drawCustomBar, g_cfg.hideVanillaBar,
+    LogPrintf("Config loaded: enabled=%d lang=%s customBar=%d hideVanilla=%d hpNum=%d dmgNum=%d",
+              g_cfg.enabled, g_cfg.useChinese ? "zh" : "en", g_cfg.drawCustomBar, g_cfg.hideVanillaBar,
               g_cfg.showHpNumbers, g_cfg.showDamageNumbers);
 }

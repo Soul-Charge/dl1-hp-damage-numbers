@@ -8,6 +8,7 @@ struct ModConfig {
     int toggleKey = VK_F5;      // Toggle entire overlay
     int modeKey = VK_F6;        // Cycle bar mode: Custom Bar+Numbers -> Numbers Only -> Off
     bool enableLog = true;
+    bool useChinese = false;    // Resolved from language=auto|en|zh
 
     // [HealthBar]
     bool showHealthBar = true;

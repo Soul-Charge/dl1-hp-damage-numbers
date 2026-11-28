@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <unordered_map>
 #include <algorithm>
 #include <string>
 
@@ -35,7 +36,7 @@ struct Color {
 };
 
 static constexpr int ATLAS_W = 512;
-static constexpr int ATLAS_H = 256;
+static constexpr int ATLAS_H = 512;
 static constexpr int FONT_PX = 28;
 static constexpr size_t MAX_VERTS = 16384;
 
@@ -95,6 +96,7 @@ static ID3D11ShaderResourceView* g_atlasSRV = nullptr;
 static ID3D11SamplerState*       g_sampler  = nullptr;
 
 static GlyphInfo g_glyphs[128] = {};
+static std::unordered_map<wchar_t, GlyphInfo> g_extraGlyphs;
 static float     g_lineHeight  = 28.0f;
 static float     g_screenW     = 1920.0f;
 static float     g_screenH     = 1080.0f;
@@ -107,7 +109,7 @@ static LARGE_INTEGER g_qpf = {};
 static LARGE_INTEGER g_lastFrame = {};
 static bool g_prevToggleDown = false;
 static bool g_prevModeDown   = false;
-static std::string g_toastText;
+static std::wstring g_toastText;
 static float g_toastTimer = 0.0f;
 
 static void ReleaseRTV() {
@@ -195,6 +197,57 @@ static bool CreateFontAtlas(ID3D11Device* dev) {
         g.advance = static_cast<float>(sz.cx);
 
         curX += gw + 2;
+    }
+
+    // Rasterize CJK UI characters for built-in Simplified Chinese toast notifications
+    // Characters: 血条与伤害数字开启关闭模式自定义仅原版显示跳
+    static const wchar_t kCjkChars[] =
+        L"\u8840\u6761\u4e0e\u4f24\u5bb3\u6570\u5b57\u5f00\u542f\u5173\u95ed"
+        L"\u6a21\u5f0f\u81ea\u5b9a\u4e49\u4ec5\u539f\u7248\u663e\u793a\u8df3\u91cf";
+
+    g_extraGlyphs.clear();
+    HFONT hCjkFont = CreateFontW(
+        -FONT_PX, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        GB2312_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+    if (hCjkFont) {
+        SelectObject(hdc, hCjkFont);
+        TEXTMETRICW tmCjk = {};
+        GetTextMetricsW(hdc, &tmCjk);
+        int cjkRowH = (std::max)(rowH, static_cast<int>(tmCjk.tmHeight) + 4);
+        curX = 2;
+        curY += rowH;
+
+        for (const wchar_t* p = kCjkChars; *p; ++p) {
+            wchar_t ch = *p;
+            if (g_extraGlyphs.count(ch)) continue;
+            SIZE sz = {};
+            GetTextExtentPoint32W(hdc, &ch, 1, &sz);
+            int gw = sz.cx + 2;
+            int gh = tmCjk.tmHeight;
+
+            if (curX + gw + 2 >= ATLAS_W) {
+                curX = 2;
+                curY += cjkRowH;
+            }
+            if (curY + gh + 2 >= ATLAS_H) break;
+
+            TextOutW(hdc, curX, curY, &ch, 1);
+
+            GlyphInfo g = {};
+            g.u0 = static_cast<float>(curX) / static_cast<float>(ATLAS_W);
+            g.v0 = static_cast<float>(curY) / static_cast<float>(ATLAS_H);
+            g.u1 = static_cast<float>(curX + gw) / static_cast<float>(ATLAS_W);
+            g.v1 = static_cast<float>(curY + gh) / static_cast<float>(ATLAS_H);
+            g.w  = static_cast<float>(gw);
+            g.h  = static_cast<float>(gh);
+            g.advance = static_cast<float>(sz.cx);
+            g_extraGlyphs[ch] = g;
+
+            curX += gw + 2;
+        }
+        SelectObject(hdc, hFont);
+        DeleteObject(hCjkFont);
     }
 
     GdiFlush();
@@ -418,6 +471,47 @@ static void DrawTextOutlined(float cx, float y, const char* text, float scale, c
     DrawTextRaw(x,     y,     text, scale, fg);
 }
 
+static const GlyphInfo* FindGlyphW(wchar_t ch) {
+    if (ch >= 32 && ch < 127) return &g_glyphs[ch];
+    auto it = g_extraGlyphs.find(ch);
+    return (it != g_extraGlyphs.end()) ? &it->second : nullptr;
+}
+
+static float MeasureTextWidthW(const wchar_t* text, float scale) {
+    float w = 0.0f;
+    for (const wchar_t* p = text; *p; ++p) {
+        if (const GlyphInfo* g = FindGlyphW(*p)) w += g->advance * scale;
+    }
+    return w;
+}
+
+static void DrawTextRawW(float x, float y, const wchar_t* text, float scale, const Color& c) {
+    float cx = x;
+    for (const wchar_t* p = text; *p; ++p) {
+        const GlyphInfo* g = FindGlyphW(*p);
+        if (!g) continue;
+        if (*p != L' ') {
+            PushQuad(cx, y, cx + g->w * scale, y + g->h * scale, g->u0, g->v0, g->u1, g->v1, c);
+        }
+        cx += g->advance * scale;
+    }
+}
+
+static void DrawTextOutlinedW(float cx, float y, const wchar_t* text, float scale, const Color& fg, bool centered) {
+    float x = centered ? (cx - MeasureTextWidthW(text, scale) * 0.5f) : cx;
+    x = floorf(x + 0.5f);
+    y = floorf(y + 0.5f);
+
+    Color outline = {0.0f, 0.0f, 0.0f, fg.a * 0.90f};
+    float d = (std::max)(1.0f, scale * 1.15f);
+    DrawTextRawW(x - d, y,     text, scale, outline);
+    DrawTextRawW(x + d, y,     text, scale, outline);
+    DrawTextRawW(x,     y - d, text, scale, outline);
+    DrawTextRawW(x,     y + d, text, scale, outline);
+    DrawTextRawW(x + d, y + d, text, scale, {0.0f, 0.0f, 0.0f, fg.a * 0.65f});
+    DrawTextRawW(x,     y,     text, scale, fg);
+}
+
 static Color HealthColor(float ratio, float alpha) {
     if (ratio > 0.66f) return {0.30f, 0.85f, 0.42f, alpha}; // Tactical green
     if (ratio > 0.33f) return {0.96f, 0.77f, 0.24f, alpha}; // Warm amber
@@ -430,7 +524,7 @@ static void RenderOverlayContent(const FrameSnapshot& snap, float dt) {
     if (g_toastTimer > 0.0f) {
         g_toastTimer -= dt;
         float a = (std::min)(1.0f, g_toastTimer * 2.0f);
-        DrawTextOutlined(24.0f, 24.0f, g_toastText.c_str(), 0.78f, {0.95f, 0.95f, 0.95f, a}, false);
+        DrawTextOutlinedW(24.0f, 24.0f, g_toastText.c_str(), 0.78f, {0.95f, 0.95f, 0.95f, a}, false);
     }
 
     if (!g_cfg.enabled || !snap.hasCamera) return;
@@ -676,7 +770,13 @@ static void HandleHotkeys() {
         bool down = (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000) != 0;
         if (down && !g_prevToggleDown) {
             g_cfg.enabled = !g_cfg.enabled;
-            g_toastText = g_cfg.enabled ? "HP & Damage Overlay: ON" : "HP & Damage Overlay: OFF";
+            if (g_cfg.useChinese) {
+                g_toastText = g_cfg.enabled
+                    ? L"\u8840\u6761\u4e0e\u4f24\u5bb3\u6570\u5b57: \u5f00\u542f"
+                    : L"\u8840\u6761\u4e0e\u4f24\u5bb3\u6570\u5b57: \u5173\u95ed";
+            } else {
+                g_toastText = g_cfg.enabled ? L"HP & Damage Overlay: ON" : L"HP & Damage Overlay: OFF";
+            }
             g_toastTimer = 2.0f;
         }
         g_prevToggleDown = down;
@@ -686,14 +786,20 @@ static void HandleHotkeys() {
         if (down && !g_prevModeDown) {
             if (g_cfg.showHealthBar && g_cfg.drawCustomBar) {
                 g_cfg.drawCustomBar = false;
-                g_toastText = "Bar Mode: HP Numbers Only (Vanilla Bar)";
+                g_toastText = g_cfg.useChinese
+                    ? L"\u8840\u6761\u6a21\u5f0f: \u4ec5\u8840\u91cf\u6570\u5b57 (\u539f\u7248\u8840\u6761)"
+                    : L"Bar Mode: HP Numbers Only (Vanilla Bar)";
             } else if (g_cfg.showHealthBar && !g_cfg.drawCustomBar) {
                 g_cfg.showHealthBar = false;
-                g_toastText = "Bar Mode: Damage Numbers Only";
+                g_toastText = g_cfg.useChinese
+                    ? L"\u8840\u6761\u6a21\u5f0f: \u4ec5\u663e\u793a\u4f24\u5bb3\u8df3\u5b57"
+                    : L"Bar Mode: Damage Numbers Only";
             } else {
                 g_cfg.showHealthBar = true;
                 g_cfg.drawCustomBar = true;
-                g_toastText = "Bar Mode: Custom Health Bar + HP Numbers";
+                g_toastText = g_cfg.useChinese
+                    ? L"\u8840\u6761\u6a21\u5f0f: \u81ea\u5b9a\u4e49\u8840\u6761 + \u8840\u91cf\u6570\u5b57"
+                    : L"Bar Mode: Custom Health Bar + HP Numbers";
             }
             g_toastTimer = 2.2f;
         }
