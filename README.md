@@ -1,53 +1,90 @@
-# DL1 Enemy Health Bar Numbers & Floating Damage Numbers
+# Dying Light 1 — Enemy Health Bar Numbers & Floating Damage Numbers
 
-《消逝的光芒 1》(Dying Light 1.55, Steam x64) 原生 DX11 覆盖层模组：
-- **敌人血条 + 精确血量数字**（如 `420 / 500`，可选百分比 `420 / 500 (84%)`），支持自定义现代 RPG 血条（绿/黄/红分段 + 延迟扣血残影条 + 距离缩放与淡出），同时支持 **纯数字伴侣模式**（保留原版 / crinloader / `HealthBars7px.pak` 血条，仅叠加血量数字）。
-- **攻击实时飘出伤害数字**（支持近战、枪械、弓箭、投掷物、爆炸、AOE 多目标与持续伤害）：
-  - 普通伤害：白色描边数字；
-  - 重击 / 高伤（单次 ≥ 目标最大生命 35% 或 ≥ 400）：金色放大数字；
-  - 击杀一击：鲜红放大数字并附带 `!`。
-- **零冲突**：通过 `winmm.dll` 代理加载，不占用 `dsound.dll`（crinloader）与 `dxgi.dll`（ReShade），不修改任何 `.pak` / `.rpack` 文件，兼容所有武器/脚本/画质模组。
+<p align="center">
+  <b>English</b> | <a href="README_CN.md">简体中文</a>
+</p>
 
-## 安装与卸载
+<p align="center">
+  <a href="https://www.nexusmods.com/dyinglight/mods/1810">
+    <img src="https://img.shields.io/badge/Nexus%20Mods-Download%20v1.0.1-da8e35?style=for-the-badge" alt="Nexus Mods">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT License">
+  </a>
+  <img src="https://img.shields.io/badge/Game-Dying%20Light%201.55%20(Steam%20x64)-success?style=for-the-badge" alt="Dying Light 1.55">
+</p>
 
-### 安装
-将 `dist/` 目录下的两个文件复制到《消逝的光芒 1》游戏根目录（与 `DyingLightGame.exe` 同级）：
-- `dist/winmm.dll`
-- `dist/dl1_hp_damage.ini`
+A lightweight, native **DirectX 11 overlay mod** for **Dying Light (Steam 1.55, 64-bit)** that displays **exact enemy HP numbers** (`HP / MaxHP`) on sleek RPG health bars and **animated floating damage numbers** whenever you hit an enemy.
 
-> 注意：本模组修改内存并注入 DX11 渲染，请仅在单人或关闭 VAC 的私人联机中使用（不要在开启 VAC 的公共房间使用）。
+- **Built-in Bilingual Support (EN / 简体中文)**: Automatically detects your Windows UI language, or override via `language=auto|en|zh` in `dl1_hp_damage.ini`.
+- **Zero Conflicts**: Loaded via a clean `winmm.dll` proxy — no `.pak` edits, fully compatible with **ReShade** (`dxgi.dll`), **crinloader** (`dsound.dll`), **DLMM**, and all weapon/gameplay mods.
 
-### 卸载
-删除游戏根目录下的 `winmm.dll`、`dl1_hp_damage.ini` 和 `dl1_hp_damage.log` 即可完全还原。
+## Preview
 
-## 游戏内热键
+| Enemy Health Bar + Exact HP Numbers | Combat & Floating Damage Numbers |
+| :---: | :---: |
+| ![Preview 1](screenshots/preview_01.jpg) | ![Preview 2](screenshots/preview_02.jpg) |
 
-- **`F5`**：实时开关整个血条与伤害数字覆盖层（左上角短暂提示状态）。
-- **`F6`**：实时循环切换血条模式：
-  1. `Custom Health Bar + HP Numbers`（自定义血条 + 精确血量数字，自动隐藏原版血条避免重叠）
-  2. `HP Numbers Only (Vanilla Bar)`（仅显示精确血量数字，配合 crinloader / 7px 等原版血条使用）
-  3. `Damage Numbers Only`（仅显示攻击伤害数字）
+## Features
 
-所有开关、字号、距离、持续时间、暴击阈值均可在 `dl1_hp_damage.ini` 中自定义。
+- **Enemy Health Bars + Exact HP Numbers**: Displays current and maximum health (e.g. `1989 / 4091`, optional percentage) above enemies you aim at or recently damaged.
+- **Zero Death-Lag / No Frozen Bars**: Unlike vanilla `HudEnemyHp` bars that freeze at partial or full HP when an enemy dies in 1–2 shots, this mod queries the engine's `IsDead()` state every frame and drops the bar to `0` immediately upon death.
+- **Animated Floating Damage Numbers**: Pops crisp outlined damage numbers from enemies on melee, gunfire, arrows, explosions, and DoT ticks:
+  - **White** — Normal hits
+  - **Gold (enlarged)** — Heavy / critical hits (`>= 35%` of Max HP or `>= 400` damage, configurable)
+  - **Red with `!` (enlarged)** — Killing blows
+- **Delayed Damage-Drain Trail**: Smooth amber drain trail behind the green/yellow/red health bar fill, with distance scaling and fade-out.
+- **Built-In Companion Mode**: Prefer keeping your vanilla / crinloader / 7px bar? Press **`F6`** (or set `draw_custom_bar=0`) to render **only** exact HP numbers + floating damage numbers.
+- **Multi-Target Tracking**: Cleave attacks, grenades, and Molotovs display bars & damage numbers for all damaged enemies simultaneously.
 
-## 从源码构建
+## Installation & Uninstallation
 
-需要 Visual Studio 2022（含 C++ x64 工具链与 Windows SDK）：
+### Install
+1. Download the latest release archive from [Nexus Mods](https://www.nexusmods.com/dyinglight/mods/1810) (or build from source).
+2. Extract **`winmm.dll`** and **`dl1_hp_damage.ini`** into your Dying Light root folder (next to `DyingLightGame.exe`).
+3. Launch the game.
+
+> **VAC / Multiplayer Notice**: This mod hooks game memory and DirectX 11 rendering. Use it in **single-player or private co-op with VAC disabled ONLY**. Do not use on VAC-secured public servers.
+
+### Uninstall
+Delete `winmm.dll`, `dl1_hp_damage.ini`, and `dl1_hp_damage.log` from your Dying Light root folder.
+
+## In-Game Hotkeys
+
+All hotkeys, bar dimensions, colors/thresholds, font scales, distances, and language settings can be customized in [`dist/dl1_hp_damage.ini`](dist/dl1_hp_damage.ini).
+
+- **`F5`** — Toggle the entire overlay ON / OFF.
+- **`F6`** — Cycle bar mode live in-game:
+  1. **Custom Health Bar + HP Numbers** *(default, automatically hides vanilla bar to prevent overlap)*
+  2. **HP Numbers Only** *(companion mode for vanilla / crinloader / 7px bars)*
+  3. **Damage Numbers Only**
+
+## Building from Source
+
+Requires **Visual Studio 2022** (Desktop development with C++ x64 toolset & Windows SDK) and **PowerShell 7 (`pwsh`)**:
 
 ```powershell
-# 仅构建到 dist/winmm.dll
+# Build Release x64 DLL to dist/winmm.dll
 pwsh -NoProfile -File build.ps1
 
-# 构建并安装到游戏目录
+# Build and install directly to your Dying Light folder
 pwsh -NoProfile -File build.ps1 -Install
+
+# Build and package a clean Nexus Mods release zip into release/
+pwsh -NoProfile -File package_release.ps1 -Version "1.0.1"
 ```
 
-## 技术原理
+## Architecture Overview
 
-1. **`winmm.dll` 代理**：动态从 `GetSystemDirectoryW()\winmm.dll` 解析全部 180 个系统导出，通过 MASM x64 跳板（`src/winmm_stubs.asm`）零开销转发。
-2. **游戏数据 Hook（`src/game_hooks.cpp`）**：
-   - Hook `gamedll_x64_rwdi.dll` 的 `CHudEnemyHpItem::Update`（RVA `0x5d0740`），获取准星瞄准敌人的指针、精确当前血量与最大血量；若未安装 crinloader，则自动在 `0x5d0d91` 开启 `HudEnemyHp` 层。
-   - Hook `engine_x64_rwdi.dll` 导出的 `IControlObject::TakeDamage`（动态 `GetProcAddress` 解析），通过 `IsAI()` 与 `HealthModule::owner == enemy` 双重校验 + SEH 保护，读取受击前后 `HealthModule + 0x78` 的精确血量差值，生成 3D 锚点伤害飘字并追踪所有近期受击敌人。
-   - 通过 `IBaseCamera::GetCombinedMatrix`（动态导出解析）将敌人头部/受击 3D 坐标实时投影到屏幕像素。
-3. **纯 D3D11 2D 渲染器（`src/d3d11_renderer.cpp`）**：
-   - 不依赖 `D3D11_CREATE_DEVICE_BGRA_SUPPORT`（DL1 默认 `Flags=0`），使用 GDI 光栅化 `Segoe UI Bold` 字体图集 + 单次批处理 D3D11 着色器渲染，完整备份与还原 D3D11 管线状态，兼容 ReShade 6.x 与窗口大小变化。
+1. **Dynamic `winmm.dll` Proxy (`src/winmm_proxy.cpp`, `src/winmm_stubs.asm`)**: Resolves all 180 exports from `GetSystemDirectoryW()\winmm.dll` at runtime and forwards them with zero-overhead MASM64 jump stubs.
+2. **Game Hooks & Projection (`src/game_hooks.cpp`)**:
+   - Hooks `CHudEnemyHpItem::Update` (`gamedll_x64_rwdi.dll + 0x5d0740`, with exact prologue verification) and enables `HudEnemyHp` at `0x5d0d91` if vanilla (no crinloader).
+   - Hooks `IControlObject::TakeDamage` (dynamically resolved via `GetProcAddress` on `engine_x64_rwdi.dll`), resolves `CAI*` via `*(*(controlObj + 0x8) + 0xa0)` validated by `HealthModule::owner == enemy`, and polls `(enemy + 0x350)->vtable[0x40]` (`IsDead()`) every frame under SEH guards.
+   - Projects 3D world head coordinates via `IBaseCamera::GetCombinedMatrix`.
+3. **Pure D3D11 2D Renderer (`src/d3d11_renderer.cpp`)**:
+   - Does not require `D3D11_CREATE_DEVICE_BGRA_SUPPORT` (Dying Light creates its D3D11 device with `Flags = 0`).
+   - Rasterizes `Segoe UI Bold` (ASCII) + `Microsoft YaHei UI Bold` (CJK toast glyphs) via GDI into a single `512x512` RGBA8 atlas and renders all bars & outlined text in a single batched draw call with full D3D11 pipeline state backup/restore.
+
+## License
+
+Released under the [MIT License](LICENSE).
